@@ -170,6 +170,84 @@ def create_model_worker_app(log_level: str = "INFO", **kwargs) -> FastAPI:
             sys.modules["fastchat.serve.vllm_worker"].worker = worker
             sys.modules["fastchat.serve.vllm_worker"].logger.setLevel(log_level)
 
+        elif args.infer_turbo == "fastllm":
+            from fastchat.serve.fastllm_worker import app, GptqConfig, AWQConfig, FastLLMWorker, worker_id
+            from fastllm_pytools import llm
+
+            args.gpus = "0"  # GPU的编号,如果有多个GPU，可以设置为"0,1,2,3"
+            args.max_gpu_memory = "22GiB"
+            args.num_gpus = 1  # model worker的切分是model并行，这里填写显卡的数量
+
+            args.load_8bit = False
+            args.cpu_offloading = None
+            args.gptq_ckpt = None
+            args.gptq_wbits = 16
+            args.gptq_groupsize = -1
+            args.gptq_act_order = False
+            args.awq_ckpt = None
+            args.awq_wbits = 16
+            args.awq_groupsize = -1
+            args.model_names = [""]
+            args.conv_template = None
+            args.limit_worker_concurrency = 5
+            args.stream_interval = 2
+            args.no_register = False
+            args.embed_in_truncate = False
+            for k, v in kwargs.items():
+                setattr(args, k, v)
+            if args.gpus:
+                if args.num_gpus is None:
+                    args.num_gpus = len(args.gpus.split(','))
+                if len(args.gpus.split(",")) < args.num_gpus:
+                    raise ValueError(
+                        f"Larger --num-gpus ({args.num_gpus}) than --gpus {args.gpus}!"
+                    )
+                os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
+            gptq_config = GptqConfig(
+                ckpt=args.gptq_ckpt or args.model_path,
+                wbits=args.gptq_wbits,
+                groupsize=args.gptq_groupsize,
+                act_order=args.gptq_act_order,
+            )
+            awq_config = AWQConfig(
+                ckpt=args.awq_ckpt or args.model_path,
+                wbits=args.awq_wbits,
+                groupsize=args.awq_groupsize,
+            )
+
+            #llm.set_device_map(["cuda:0", "cuda:1"])
+            llm.set_cpu_threads(32)
+            llm.set_cpu_low_mem(False)
+            llm.set_cuda_embedding(True)
+            llm_engine = llm.model(args.model_path + "/model.flm")
+            llm_engine.direct_query = True
+            llm_engine.set_atype("float16");
+
+            worker = FastLLMWorker(
+                controller_addr=args.controller_address,
+                worker_addr=args.worker_address,
+                worker_id=worker_id,
+                model_path=args.model_path,
+                model_names=args.model_names,
+                limit_worker_concurrency=args.limit_worker_concurrency,
+                no_register=args.no_register,
+                llm_engine=llm_engine,
+                device=args.device,
+                num_gpus=args.num_gpus,
+                max_gpu_memory=args.max_gpu_memory,
+                load_8bit=args.load_8bit,
+                cpu_offloading=args.cpu_offloading,
+                gptq_config=gptq_config,
+                awq_config=awq_config,
+                stream_interval=args.stream_interval,
+                conv_template=args.conv_template,
+                embed_in_truncate=args.embed_in_truncate,
+            )
+
+            sys.modules["fastchat.serve.fastllm_worker"].args = args
+            sys.modules["fastchat.serve.fastllm_worker"].gptq_config = gptq_config
+            sys.modules["fastchat.serve.fastllm_worker"].logger.setLevel(log_level)
+
         else:
             from fastchat.serve.model_worker import app, GptqConfig, AWQConfig, ModelWorker, worker_id
 
